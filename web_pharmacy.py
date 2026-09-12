@@ -1,30 +1,15 @@
 import streamlit as st
-import sqlite3
+from supabase import create_client, Client
 from datetime import datetime
 
-# ---------- ڈیٹا بیس ----------
-def init_db():
-    conn = sqlite3.connect("pharmacy.db")
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS medicines (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        company TEXT,
-        price REAL,
-        quantity INTEGER,
-        expiry TEXT
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS sales (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        medicine_name TEXT,
-        qty INTEGER,
-        total REAL,
-        date TEXT
-    )""")
-    conn.commit()
-    conn.close()
+# ---------- Supabase کنیکشن ----------
+SUPABASE_KEY = "sb_publishable_Ox_Dj02i1a5QU8GY--QxmAYNhCTuFc"
+SUPABASE_URL = "https://fojiefzqep1xbjwmbncw.supabase.co"
 
-init_db()
+try:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    st.error(f"ڈیٹا بیس سے کنیکشن میں مسئلہ: {e}")
 
 st.set_page_config(page_title="فارمیسی سوفٹ ویئر", layout="wide")
 
@@ -67,28 +52,32 @@ else:
             
             if st.form_submit_button("شامل کریں"):
                 if name and price and qty:
-                    conn = sqlite3.connect("pharmacy.db")
-                    c = conn.cursor()
-                    c.execute("INSERT INTO medicines (name, company, price, quantity, expiry) VALUES (?,?,?,?,?)",
-                              (name, company, price, qty, expiry))
-                    conn.commit()
-                    conn.close()
-                    st.success("دوا شامل ہو گئی!")
-                    st.rerun()
+                    try:
+                        supabase.table('medicines').insert({
+                            "name": name,
+                            "company": company,
+                            "price": price,
+                            "quantity": qty,
+                            "expiry": expiry
+                        }).execute()
+                        st.success("دوا شامل ہو گئی!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"خرابی: {e}")
                 else:
                     st.warning("نام، قیمت اور مقدار لازمی ہیں")
         
         st.divider()
         st.subheader("موجودہ اسٹاک")
         
-        conn = sqlite3.connect("pharmacy.db")
-        c = conn.cursor()
-        c.execute("SELECT * FROM medicines")
-        rows = c.fetchall()
-        conn.close()
+        try:
+            response = supabase.table('medicines').select('*').execute()
+            rows = response.data
+        except Exception as e:
+            rows = []
+            st.error(f"ڈیٹا لوڈ کرنے میں مسئلہ: {e}")
         
         if rows:
-            # ہیڈر
             h1, h2, h3, h4, h5, h6 = st.columns([1, 2, 2, 1, 1, 2])
             h1.write("**آئی ڈی**")
             h2.write("**نام**")
@@ -100,16 +89,15 @@ else:
             
             for row in rows:
                 col1, col2, col3, col4, col5, col6 = st.columns([1, 2, 2, 1, 1, 2])
-                col1.write(row[0])
-                col2.write(row[1])
-                col3.write(row[2])
-                col4.write(row[3])
-                # کم اسٹاک پر سرخ وارننگ
-                if row[4] < 10:
-                    col5.error(row[4])
+                col1.write(row['id'])
+                col2.write(row['name'])
+                col3.write(row['company'])
+                col4.write(row['price'])
+                if row['quantity'] < 10:
+                    col5.error(row['quantity'])
                 else:
-                    col5.write(row[4])
-                col6.write(row[5])
+                    col5.write(row['quantity'])
+                col6.write(row['expiry'])
         else:
             st.info("ابھی کوئی دوا شامل نہیں کی گئی")
 
@@ -117,36 +105,44 @@ else:
     elif menu == "فروخت کریں":
         st.header("دوا فروخت کریں")
         
-        conn = sqlite3.connect("pharmacy.db")
-        c = conn.cursor()
-        c.execute("SELECT id, name, price, quantity FROM medicines WHERE quantity > 0")
-        medicines = c.fetchall()
-        conn.close()
+        try:
+            response = supabase.table('medicines').select('*').gt('quantity', 0).execute()
+            medicines = response.data
+        except Exception as e:
+            medicines = []
+            st.error(f"ڈیٹا لوڈ کرنے میں مسئلہ: {e}")
         
         if medicines:
-            med_options = {f"{m[1]} (اسٹاک: {m[3]})": m for m in medicines}
+            med_options = {f"{m['name']} (اسٹاک: {m['quantity']})": m for m in medicines}
             selected_med = st.selectbox("دوا منتخب کریں:", list(med_options.keys()))
             sell_qty = st.number_input("کتنے عدد بیچنے ہیں؟", min_value=1, step=1)
             
             med = med_options[selected_med]
             
             if st.button("فروخت کریں"):
-                if sell_qty > med[3]:
-                    st.error(f"اسٹاک صرف {med[3]} ہے")
+                if sell_qty > med['quantity']:
+                    st.error(f"اسٹاک صرف {med['quantity']} ہے")
                 else:
-                    total = sell_qty * med[2]
+                    total = sell_qty * med['price']
                     date_now = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    conn = sqlite3.connect("pharmacy.db")
-                    c = conn.cursor()
-                    c.execute("UPDATE medicines SET quantity=? WHERE id=?", (med[3] - sell_qty, med[0]))
-                    c.execute("INSERT INTO sales (medicine_name, qty, total, date) VALUES (?,?,?,?)",
-                              (med[1], sell_qty, total, date_now))
-                    conn.commit()
-                    conn.close()
-                    
-                    st.success(f"✅ فروخت مکمل! کل رقم: {total} روپے")
-                    st.balloons()
+                    try:
+                        supabase.table('medicines').update({
+                            "quantity": med['quantity'] - sell_qty
+                        }).eq("id", med['id']).execute()
+                        
+                        supabase.table('sales').insert({
+                            "medicine_name": med['name'],
+                            "qty": sell_qty,
+                            "total": total,
+                            "date": date_now
+                        }).execute()
+                        
+                        st.success(f"✅ فروخت مکمل! کل رقم: {total} روپے")
+                        st.balloons()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"فروخت میں خرابی: {e}")
         else:
             st.warning("اسٹاک خالی ہے یا کوئی دوا دستیاب نہیں")
 
@@ -154,15 +150,27 @@ else:
     elif menu == "رپورٹ":
         st.header("فروخت کی رپورٹ")
         
-        conn = sqlite3.connect("pharmacy.db")
-        c = conn.cursor()
-        c.execute("SELECT * FROM sales ORDER BY id DESC")
-        rows = c.fetchall()
-        conn.close()
+        try:
+            response = supabase.table('sales').select('*').order('id', desc=True).execute()
+            rows = response.data
+        except Exception as e:
+            rows = []
+            st.error(f"رپورٹ لوڈ کرنے میں مسئلہ: {e}")
         
         if rows:
-            st.table(rows)
-            total_sales = sum(row[3] for row in rows)
+            sales_data = []
+            total_sales = 0
+            for row in rows:
+                sales_data.append({
+                    "آئی ڈی": row['id'],
+                    "دوا": row['medicine_name'],
+                    "مقدار": row['qty'],
+                    "رقم": row['total'],
+                    "تاریخ": row['date']
+                })
+                total_sales += row['total']
+            
+            st.table(sales_data)
             st.metric("کل فروخت کی رقم", f"{total_sales} روپے")
         else:
             st.info("ابھی کوئی فروخت نہیں ہوئی")
